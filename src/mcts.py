@@ -1,17 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from math import sqrt
 
 import numpy as np
 import numpy.typing as npt
 
-from game_logic import (
-    is_board_full,
-    is_win,
-    place_piece,
-)
-from ui import render
+from game_logic import get_valid_moves, is_board_full, is_win, place_piece
 
 NUM_SIMS = 100
 
@@ -25,25 +21,35 @@ class Node:
     value: float = 0.0
     visits: int = 0
 
-    # action_probs float for moving to each col
     def expand(self, action_probs: npt.NDArray[np.float32]) -> None:
-        for action, prob in enumerate(action_probs):
-            if prob > 0:
+        valid_moves: npt.NDArray[np.int64] = get_valid_moves(self.state)
+        masked_probs = action_probs * valid_moves
+
+        total_prob = np.sum(masked_probs)
+        if total_prob > 0:
+            masked_probs /= total_prob
+        else:
+            masked_probs = valid_moves / np.sum(valid_moves)
+
+        for action, valid in enumerate(valid_moves):
+            if valid:
                 next_state = place_piece(
                     board=self.state, player=self.turn, action=action
                 )
 
                 self.children[action] = Node(
-                    prior=prob, turn=self.turn * -1, state=next_state
+                    prior=masked_probs[action], turn=self.turn * -1, state=next_state
                 )
 
     def _ucb_score(self, child: Node) -> float:
-        prior_score = float(child.prior * sqrt(self.visits) / (child.visits + 1))
+        prior_score = (
+            float(child.prior) * sqrt(max(1, self.visits)) / (child.visits + 1)
+        )
 
         if child.visits == 0:
             value_score = 0.0
         else:
-            value_score = child.value / child.visits
+            value_score = child.value / child.visits * self.turn
 
         return value_score + prior_score
 
@@ -59,6 +65,121 @@ class Node:
         return selected_action, self.children[selected_action]
 
 
+def get_action_probs(root: Node) -> npt.NDArray[np.float32]:
+    action_probs = np.zeros(7, dtype=np.float32)
+    for action, child in root.children.items():
+        action_probs[action] = child.visits
+
+    total_visits = np.sum(action_probs)
+    if total_visits > 0:
+        action_probs /= total_visits
+    return action_probs
+
+
+def run_batched_mcts(
+    boards: list[npt.NDArray[np.int64]],
+    players: list[int],
+    predict_batch_fn: Callable,
+    num_sims: int = NUM_SIMS,
+) -> list[npt.NDArray[np.float32]]:
+    roots = [Node(prior=0.0, turn=p, state=b) for b, p in zip(boards, players)]
+
+    _, initial_policies = predict_batch_fn(boards, players)
+    for root, policy in zip(roots, initial_policies):
+        root.expand(policy)
+
+    for _ in range(num_sims):
+        search_paths = []
+        leaf_nodes = []
+
+        states_to_eval = []
+        turns_to_eval = []
+        eval_indicies = []
+
+        leaf_values = [0.0] * len(roots)
+
+        # Selection
+        for i, root in enumerate(roots):
+            node = root
+            path = [node]
+
+            # Find next unexpanded node
+            while node.children:
+                _, node = node.select_child()
+                path.append(node)
+
+            search_paths.append(path)
+            leaf_nodes.append(node)
+
+            # Check end states
+            if is_board_full(node.state):
+                leaf_values[i] = 0.0
+            elif is_win(node.state, player=1):
+                leaf_values[i] = 1.0
+            elif is_win(node.state, player=-1):
+                leaf_values[i] = -1.0
+            else:  # Game not over, queue for batch eval
+                states_to_eval.append(node.state)
+                turns_to_eval.append(node.turn)
+                eval_indicies.append(i)
+
+        # Batch eval and expansion
+        if states_to_eval:
+            values, policies = predict_batch_fn(states_to_eval, turns_to_eval)
+            for idx, v, p in zip(eval_indicies, values, policies):
+                leaf_values[idx] = v
+                leaf_nodes[idx].expand(p)
+
+        # Backprop
+        for path, value in zip(search_paths, leaf_values):
+            for node in path:
+                node.value += value
+                node.visits += 1
+
+    return [get_action_probs(root) for root in roots]
+
+
+def run_mcts(
+    board: npt.NDArray[np.int64],
+    player: int,
+    predict_fn: Callable[
+        [npt.NDArray[np.int64], int], tuple[float, npt.NDArray[np.float32]]
+    ],
+    num_sims: int = NUM_SIMS,
+) -> npt.NDArray[np.float32]:
+    root = Node(prior=0.0, turn=player, state=board)
+
+    value, action_probs = predict_fn(root.state, root.turn)
+    root.expand(action_probs)
+
+    for _ in range(num_sims):
+        node = root
+        search_path = [node]
+
+        # find next unexpanded node
+        while node.children:
+            _, node = node.select_child()
+            search_path.append(node)
+
+        # check end states
+        if is_board_full(node.state):
+            value = 0.0
+        elif is_win(node.state, player=1):
+            value = 1.0
+        elif is_win(node.state, player=-1):
+            value = -1.0
+        else:  # game not over, expand node
+            value, action_probs = predict_fn(node.state, node.turn)
+            node.expand(action_probs)
+
+        # backprop value and visits along search path
+        for node in search_path:
+            node.value += value
+            node.visits += 1
+
+    return get_action_probs(root)
+
+
 if __name__ == "__main__":
     board = np.array(
         [
@@ -71,48 +192,18 @@ if __name__ == "__main__":
         ]
     )
 
-    # initialize and expand root
-    root = Node(prior=0.0, turn=1, state=board)
-
-    def dummy_model_predict(
-        board: npt.NDArray[np.int64],
+    def dummy_predict_fn(
+        state: npt.NDArray[np.int64], turn: int
     ) -> tuple[float, npt.NDArray[np.float32]]:
-        value_head = 0.5
-        policy_head = np.array([0.5, 0, 0, 0, 0, 0.5, 0], dtype=np.float32)
-        return value_head, policy_head
+        value = 0.5
+        policy = np.array([0.5, 0.0, 0.0, 0.0, 0.0, 0.5, 0.0], dtype=np.float32)
+        return value, policy
 
-    root.expand(action_probs=dummy_model_predict(root.state)[1])
+    print("Running MCTS simulation...")
+    final_action_probs = run_mcts(
+        board=board, player=1, predict_fn=dummy_predict_fn, num_sims=NUM_SIMS
+    )
 
-    # iterate through simulation
-    for _ in range(NUM_SIMS):
-        node = root
-        search_path = [node]
-
-        # find next unexpanded node
-        while node.children:
-            action, node = node.select_child()
-            search_path.append(node)
-
-        value = None
-        if is_board_full(node.state):
-            value = 0.0
-        if is_win(node.state, player=1):
-            value = 1.0
-        if is_win(node.state, player=-1):
-            value = -1.0
-
-        if value is None:
-            # game not over, expand node
-            value, action_probs = dummy_model_predict(node.state)
-            node.expand(action_probs)
-
-        # update value and visits along search path
-        for node in search_path:
-            node.value += value
-            node.visits += 1
-
-    print(root.children[0].state)
-    print(root.children[0].value)
-
-    print(root.children[5].state)
-    print(root.children[5].value)
+    print("\nResulting Action Probabilities:")
+    for col, prob in enumerate(final_action_probs):
+        print(f"Column {col}: {prob:.3f}")

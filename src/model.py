@@ -1,4 +1,3 @@
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -51,22 +50,21 @@ class Connect4Model(nn.Module):
 
     def forward(self, x):
         # game=(3, 6, 7)
-        x.view(-1, 3, 6, 7)
+        x = x.view(-1, 3, 6, 7)
 
         x = F.relu(self.initial_bn(self.initial_conv(x)))
 
-        # resnet - save original x to preserve gradients
         # res 1
         res = x
         x = F.relu(self.res1_bn1(self.res1_conv1(x)))
-        x = F.relu(self.res1_bn2(self.res1_conv2(x)))
+        x = self.res1_bn2(self.res1_conv2(x))
         x += res
         x = F.relu(x)
 
         # res 2
         res = x
         x = F.relu(self.res2_bn1(self.res2_conv1(x)))
-        x = F.relu(self.res2_bn2(self.res2_conv2(x)))
+        x = self.res2_bn2(self.res2_conv2(x))
         x += res
         x = F.relu(x)
 
@@ -74,13 +72,14 @@ class Connect4Model(nn.Module):
         v = F.relu(self.value_bn(self.value_conv(x)))
         v = v.view(-1, 3 * 6 * 7)  # flatten for linear layer
         v = F.relu(self.value_fc(v))
-        v = F.tanh(v)
+        v = self.value_head(v)
+        v = torch.tanh(v)
 
         # policy head
         p = F.relu(self.policy_bn(self.policy_conv(x)))
         p = p.view(-1, 32 * 6 * 7)  # flatten for linear layer
-        p = F.relu(self.policy_head(p))
-        p = self.policy_ls(p).exp()
+        p = self.policy_head(p)
+        p = self.policy_ls(p)
 
         return v, p
 
