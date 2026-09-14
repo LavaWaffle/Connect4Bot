@@ -5,17 +5,17 @@ import numpy as np
 import pygame
 import torch
 
-from game_logic import (
+from .game_logic import (
     get_init_board,
     get_valid_moves,
     is_board_full,
     is_win,
     place_piece,
 )
-from mcts import run_batched_mcts
-from model import Connect4Model
-from train import predict_batch_fn
-from ui import SQUARESIZE, draw_board, draw_policies
+from .mcts import run_batched_mcts
+from .model import Connect4Model
+from .train import predict_batch_fn
+from .ui import SQUARESIZE, draw_board, draw_policies
 
 TEMPERATURE = 0.2
 

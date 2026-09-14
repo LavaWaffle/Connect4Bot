@@ -7,7 +7,7 @@ from math import sqrt
 import numpy as np
 import numpy.typing as npt
 
-from game_logic import get_valid_moves, is_board_full, is_win, place_piece
+from .game_logic import get_valid_moves, is_board_full, is_win, place_piece
 
 NUM_SIMS = 100
 

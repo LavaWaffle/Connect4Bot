@@ -8,15 +8,15 @@ import torch.nn.functional as F
 from torch import optim
 from torch.utils.data import DataLoader, Dataset
 
-from game_logic import (
+from .game_logic import (
     get_init_board,
     get_valid_moves,
     is_board_full,
     is_win,
     place_piece,
 )
-from mcts import run_batched_mcts
-from model import Connect4Model
+from .mcts import run_batched_mcts
+from .model import Connect4Model
 
 
 class Connect4Dataset(Dataset):
