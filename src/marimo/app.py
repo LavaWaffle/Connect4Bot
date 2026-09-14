@@ -6,6 +6,7 @@ app = marimo.App()
 
 @app.cell
 def setup_imports():
+    import math
     import os
     import sys
 
@@ -13,6 +14,8 @@ def setup_imports():
     import numpy as np
     import torch
     import traitlets
+
+    import marimo as mo
 
     # Ensure 'src' is in the system path so we can import the 'model' package
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -41,12 +44,14 @@ def setup_imports():
         is_win,
         np,
         os,
+        math,
         place_piece,
         predict_batch_fn,
         run_batched_mcts,
         src_dir,
         torch,
         traitlets,
+        mo,
     )
 
 
@@ -65,8 +70,16 @@ def create_widget_class(anywidget, current_dir, os, traitlets):
         # Synchronized states
         board = traitlets.List().tag(sync=True)
         done = traitlets.Bool(False).tag(sync=True)
+        policy_raw = traitlets.List([]).tag(sync=True)
+        policy_temp = traitlets.List([]).tag(sync=True)
 
     return (Connect4Widget,)
+
+
+@app.cell
+def define_ai_params():
+    ai_params = {"num_sims": 100, "temperature": 0.2}
+    return (ai_params,)
 
 
 @app.cell
@@ -79,11 +92,13 @@ def init_game(
     is_win,
     np,
     os,
+    math,
     place_piece,
     predict_batch_fn,
     run_batched_mcts,
     src_dir,
     torch,
+    ai_params,
 ):
     # Setup Device
     device = torch.device(
@@ -167,14 +182,19 @@ def init_game(
 
                 # --- 2. AI Turn ---
                 policy = run_batched_mcts(
-                    [state.board], [-1], predict_fn, num_sims=100
+                    [state.board], [-1], predict_fn, num_sims=ai_params["num_sims"]
                 )[0]
 
-                temperature = 0.2
-                adjusted_policy = np.power(policy, 1.0 / temperature)
-                adjusted_policy /= np.sum(adjusted_policy)
-                best_col = int(np.random.choice(7, p=adjusted_policy))
+                temperature = ai_params["temperature"]
+                if math.isclose(temperature, 0.0):
+                    adjusted_policy = policy
+                else:
+                    adjusted_policy = np.power(policy, 1.0 / temperature)
+                    adjusted_policy /= np.sum(adjusted_policy)
+                widget.policy_raw = policy.tolist()
+                widget.policy_temp = adjusted_policy.tolist()
 
+                best_col = int(np.random.choice(7, p=adjusted_policy))
                 state.board = place_piece(state.board, player=-1, action=best_col)
                 widget.board = state.board.tolist()
 
@@ -189,6 +209,7 @@ def init_game(
 
             finally:
                 state.is_processing = False
+                widget.send({"type": "turn_complete"})
 
     # Listen for custom messages instead of traitlet changes
     widget.on_msg(handle_msg)
@@ -196,10 +217,53 @@ def init_game(
 
 
 @app.cell
-def display_ui(widget):
-    # Outputting the widget renders the React Component to the Marimo interface
-    widget
-    return
+def dynamic_sliders(mo, ai_params, widget, np, math):
+    sim_slider = mo.ui.slider(
+        10,
+        500,
+        value=100,
+        label="Num Monte Carlo Simulations",
+        show_value=True,
+        on_change=lambda v, p=ai_params: ai_params.update({"num_sims": v}),
+    )
+
+    def on_temp_change(v):
+        # Update the parameter state
+        ai_params["temperature"] = v
+
+        # Recalculate if we have a valid policy_raw
+        raw = widget.policy_raw
+        if raw and len(raw) == 7:
+            policy = np.array(raw)
+            if math.isclose(v, 0.0):
+                adjusted_policy = policy
+            else:
+                adjusted_policy = np.power(policy, 1.0 / v)
+                policy_sum = np.sum(adjusted_policy)
+                if policy_sum > 0:
+                    adjusted_policy /= policy_sum
+
+            widget.policy_temp = adjusted_policy.tolist()
+
+    temp_slider = mo.ui.slider(
+        start=0.1,
+        stop=1.0,
+        step=0.1,
+        value=0.2,
+        label="Policy Temperature",
+        show_value=True,
+        on_change=on_temp_change,
+    )
+
+    # Assign to a variable and return as a tuple
+    sliders_view = mo.vstack([sim_slider, temp_slider])
+    return (sliders_view,)
+
+
+@app.cell
+def display_ui(mo, widget, sliders_view):
+    game_interface = mo.vstack([sliders_view, widget])
+    game_interface
 
 
 if __name__ == "__main__":

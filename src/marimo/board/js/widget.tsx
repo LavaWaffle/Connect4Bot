@@ -11,24 +11,34 @@ const COLORS = {
 };
 
 const Board = () => {
-  const [board, setBoard] = useModelState<number[][]>("board");
-  const [done, setDone] = useModelState<boolean>("done");
+  const [board] = useModelState<number[][]>("board");
+  const [done] = useModelState<boolean>("done");
+  const [policyRaw, setPolicyRaw] = useModelState<number[]>("policy_raw");
+  const [policyTemp, setPolicyTemp] = useModelState<number[]>("policy_temp");
   const model = useModel();
 
-  const [renderedBoard, setRenderedBoard] = React.useState<number[][] | null>(null);
+  const [renderedBoard, setRenderedBoard] = React.useState<number[][] | null>(
+    null,
+  );
   const [showRestart, setShowRestart] = React.useState<boolean>(false);
 
   const [activeCol, setActiveCol] = React.useState<number>(0);
   const [isHovering, setIsHovering] = React.useState<boolean>(false);
   const [dropAnim, setDropAnim] = React.useState<boolean>(false);
 
+  // Track if we are waiting for the backend AI calculation
+  const [isWaiting, setIsWaiting] = React.useState<boolean>(false);
+
   // Button Animation States
   const [isRestartHover, setIsRestartHover] = React.useState<boolean>(false);
-  const [isRestartSpinning, setIsRestartSpinning] = React.useState<boolean>(false);
+  const [isRestartSpinning, setIsRestartSpinning] =
+    React.useState<boolean>(false);
 
   const prevBoardRef = React.useRef<number[][] | null>(null);
 
-  const [animationQueue, setAnimationQueue] = React.useState<{row: number, col: number, player: number}[]>([]);
+  const [animationQueue, setAnimationQueue] = React.useState<
+    { row: number; col: number; player: number }[]
+  >([]);
   const [activeAnimation, setActiveAnimation] = React.useState<{
     row: number;
     col: number;
@@ -36,8 +46,23 @@ const Board = () => {
     falling: boolean;
   } | null>(null);
 
+  // Listen for the backend completion message
+  React.useEffect(() => {
+    const handleCustomMessage = (msg: any) => {
+      if (msg.type === "turn_complete") {
+        setIsWaiting(false);
+      }
+    };
+    model.on("msg:custom", handleCustomMessage);
+    return () => model.off("msg:custom", handleCustomMessage);
+  }, [model]);
+
   const isAnimating = activeAnimation !== null || animationQueue.length > 0;
-  const showHoverChip = isHovering && !isAnimating && !done;
+
+  // Consolidate busy states (animating, game over, or waiting for AI)
+  const isBusy = isAnimating || done || isWaiting;
+
+  const showHoverChip = isHovering && !isBusy;
 
   React.useEffect(() => {
     if (done && !isAnimating) {
@@ -56,7 +81,7 @@ const Board = () => {
       return;
     }
 
-    const isBoardEmpty = board.every(row => row.every(cell => cell === 0));
+    const isBoardEmpty = board.every((row) => row.every((cell) => cell === 0));
     if (isBoardEmpty) {
       setRenderedBoard(board);
       setAnimationQueue([]);
@@ -96,15 +121,18 @@ const Board = () => {
     if (!activeAnimation.falling) {
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
-          setActiveAnimation((prev) => (prev ? { ...prev, falling: true } : null));
+          setActiveAnimation((prev) =>
+            prev ? { ...prev, falling: true } : null,
+          );
         });
       });
     } else {
       const timer = setTimeout(() => {
         setRenderedBoard((prev) => {
           if (!prev) return prev;
-          const nextBoard = prev.map(row => [...row]);
-          nextBoard[activeAnimation.row][activeAnimation.col] = activeAnimation.player;
+          const nextBoard = prev.map((row) => [...row]);
+          nextBoard[activeAnimation.row][activeAnimation.col] =
+            activeAnimation.player;
           return nextBoard;
         });
         setActiveAnimation(null);
@@ -117,11 +145,13 @@ const Board = () => {
   if (!board || !renderedBoard) return <div>Loading board...</div>;
 
   const handleColumnClick = (colIndex: number) => {
-    if (isAnimating || done) return;
+    if (isBusy) return;
 
-    // Trigger the localized 150ms drop state independently of the board animation
     setDropAnim(true);
     setTimeout(() => setDropAnim(false), 150);
+
+    // Lock the UI until the AI calculation returns
+    setIsWaiting(true);
 
     model.send({ type: "click", col: colIndex });
   };
@@ -130,35 +160,35 @@ const Board = () => {
     if (isRestartSpinning) return;
 
     setIsRestartSpinning(true);
-
+    setPolicyRaw(Array(7).fill(0.0));
+    setPolicyTemp(Array(7).fill(0.0));
     setTimeout(() => {
       model.send({ type: "restart" });
       setIsRestartSpinning(false);
       setIsRestartHover(false);
+      setIsWaiting(false);
     }, 400);
   };
 
-  // Dynamically calculate hover chip styles based on the exact animation phase
   let hoverTranslateY = -50;
   let hoverOpacity = 0;
   let hoverTransition = "transform 0.15s ease-out, opacity 0.15s ease-out";
 
   if (dropAnim) {
-    hoverTranslateY = 25; // Drop into the slot
-    hoverOpacity = 0;     // Fade out during the drop
+    hoverTranslateY = 25;
+    hoverOpacity = 0;
     hoverTransition = "transform 0.1s ease-out, opacity 0.1s ease-out";
   } else if (showHoverChip) {
-    hoverTranslateY = 0;  // Normal resting position
+    hoverTranslateY = 0;
     hoverOpacity = 1;
     hoverTransition = "transform 0.15s ease-out, opacity 0.15s ease-out";
   } else if (!isHovering) {
-    hoverTranslateY = -50; // Slide up naturally on mouse leave
+    hoverTranslateY = -50;
     hoverOpacity = 0;
     hoverTransition = "transform 0.15s ease-out, opacity 0.15s ease-out";
   } else {
-    hoverTranslateY = -50; // Mouse is hovering, but game is animating/done
+    hoverTranslateY = -50;
     hoverOpacity = 0;
-    // Snap transform to -50px instantly so it re-enters smoothly from the top later
     hoverTransition = "transform 0s, opacity 0.15s ease-out";
   }
 
@@ -166,10 +196,13 @@ const Board = () => {
     <div style={{ display: "flex", justifyContent: "center", padding: "20px" }}>
       <div
         onMouseLeave={() => setIsHovering(false)}
-        style={{ display: "flex", flexDirection: "column", cursor: (isAnimating || done) ? "default" : "pointer" }}
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          cursor: isBusy ? "default" : "pointer",
+        }}
       >
         <div style={{ position: "relative", padding: "0 10px" }}>
-
           <div
             style={{
               position: "absolute",
@@ -219,8 +252,8 @@ const Board = () => {
                 strokeLinecap="round"
                 strokeLinejoin="round"
                 style={{
-                  transform: `rotate(${isRestartSpinning ? -360 : (isRestartHover ? -45 : 0)}deg)`,
-                  transition: "transform 0.4s ease-in-out"
+                  transform: `rotate(${isRestartSpinning ? -360 : isRestartHover ? -45 : 0}deg)`,
+                  transition: "transform 0.4s ease-in-out",
                 }}
               >
                 <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
@@ -229,7 +262,9 @@ const Board = () => {
             </div>
           )}
 
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 100px)" }}>
+          <div
+            style={{ display: "grid", gridTemplateColumns: "repeat(7, 100px)" }}
+          >
             {Array.from({ length: 7 }).map((_, colIndex) => (
               <div
                 key={`hover-hitbox-${colIndex}`}
@@ -267,8 +302,13 @@ const Board = () => {
                 if (cell === 1) pieceColor = COLORS.YELLOW;
                 else if (cell === -1) pieceColor = COLORS.BLUE;
 
-                const isCurrentlyAnimating = activeAnimation && activeAnimation.row === rowIndex && activeAnimation.col === colIndex;
-                const isQueued = animationQueue.some((p) => p.row === rowIndex && p.col === colIndex);
+                const isCurrentlyAnimating =
+                  activeAnimation &&
+                  activeAnimation.row === rowIndex &&
+                  activeAnimation.col === colIndex;
+                const isQueued = animationQueue.some(
+                  (p) => p.row === rowIndex && p.col === colIndex,
+                );
                 if (isCurrentlyAnimating || isQueued) {
                   pieceColor = COLORS.WHITE;
                 }
@@ -298,7 +338,7 @@ const Board = () => {
                     />
                   </div>
                 );
-              })
+              }),
             )}
 
             {activeAnimation && (
@@ -326,7 +366,10 @@ const Board = () => {
                   style={{
                     width: "80px",
                     height: "80px",
-                    backgroundColor: activeAnimation.player === 1 ? COLORS.YELLOW : COLORS.BLUE,
+                    backgroundColor:
+                      activeAnimation.player === 1
+                        ? COLORS.YELLOW
+                        : COLORS.BLUE,
                     borderRadius: "50%",
                     boxShadow: "inset 0 3px 6px rgba(0,0,0,0.3)",
                   }}
@@ -364,8 +407,82 @@ const Board = () => {
                     pointerEvents: "auto",
                   }}
                 />
-              ))
+              )),
             )}
+          </div>
+
+          {/* Layer 3: Policy Visualization Bars Overlaying the Bottom Row */}
+          <div
+            style={{
+              position: "absolute",
+              bottom: "6px",
+              left: "10px",
+              display: "flex",
+              width: "700px",
+              zIndex: 15,
+              pointerEvents: "none",
+            }}
+          >
+            {Array.from({ length: 7 }).map((_, colIndex) => {
+              // Keep at * 100, we will restrict the parent container's width instead
+              const rawWidth =
+                policyRaw && policyRaw.length > 0
+                  ? policyRaw[colIndex] * 100
+                  : 0;
+              const tempWidth =
+                policyTemp && policyTemp.length > 0
+                  ? policyTemp[colIndex] * 100
+                  : 0;
+
+              return (
+                <div
+                  key={`policy-col-${colIndex}`}
+                  style={{
+                    width: "100px",
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    gap: "2px",
+                  }}
+                >
+                  <div
+                    style={{
+                      width: "80%",
+                      height: "4px",
+                      display: "flex",
+                      justifyContent: "flex-start",
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: `${rawWidth}%`,
+                        height: "100%",
+                        backgroundColor: "rgb(255, 100, 100)",
+                        transition: "width 0.3s ease-out",
+                      }}
+                    />
+                  </div>
+
+                  <div
+                    style={{
+                      width: "80%",
+                      height: "4px",
+                      display: "flex",
+                      justifyContent: "flex-start",
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: `${tempWidth}%`,
+                        height: "100%",
+                        backgroundColor: "rgb(255, 0, 0)",
+                        transition: "width 0.3s ease-out",
+                      }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>
