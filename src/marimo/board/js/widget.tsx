@@ -2,6 +2,8 @@ import * as React from "react";
 import { createRender, useModelState, useModel } from "@anywidget/react";
 
 const ANIMATION_MS = 400;
+// Change this single value to shrink or grow the entire board (Originally 100)
+const CELL = 70;
 
 const COLORS = {
   GREY: "rgb(70, 71, 70)",
@@ -17,28 +19,21 @@ const Board = () => {
   const [policyTemp, setPolicyTemp] = useModelState<number[]>("policy_temp");
   const model = useModel();
 
-  const [renderedBoard, setRenderedBoard] = React.useState<number[][] | null>(
-    null,
-  );
+  const [renderedBoard, setRenderedBoard] = React.useState<number[][] | null>(null);
   const [showRestart, setShowRestart] = React.useState<boolean>(false);
 
   const [activeCol, setActiveCol] = React.useState<number>(0);
   const [isHovering, setIsHovering] = React.useState<boolean>(false);
   const [dropAnim, setDropAnim] = React.useState<boolean>(false);
 
-  // Track if we are waiting for the backend AI calculation
   const [isWaiting, setIsWaiting] = React.useState<boolean>(false);
 
-  // Button Animation States
   const [isRestartHover, setIsRestartHover] = React.useState<boolean>(false);
-  const [isRestartSpinning, setIsRestartSpinning] =
-    React.useState<boolean>(false);
+  const [isRestartSpinning, setIsRestartSpinning] = React.useState<boolean>(false);
 
   const prevBoardRef = React.useRef<number[][] | null>(null);
 
-  const [animationQueue, setAnimationQueue] = React.useState<
-    { row: number; col: number; player: number }[]
-  >([]);
+  const [animationQueue, setAnimationQueue] = React.useState<{ row: number; col: number; player: number }[]>([]);
   const [activeAnimation, setActiveAnimation] = React.useState<{
     row: number;
     col: number;
@@ -46,7 +41,6 @@ const Board = () => {
     falling: boolean;
   } | null>(null);
 
-  // Listen for the backend completion message
   React.useEffect(() => {
     const handleCustomMessage = (msg: any) => {
       if (msg.type === "turn_complete") {
@@ -58,10 +52,7 @@ const Board = () => {
   }, [model]);
 
   const isAnimating = activeAnimation !== null || animationQueue.length > 0;
-
-  // Consolidate busy states (animating, game over, or waiting for AI)
   const isBusy = isAnimating || done || isWaiting;
-
   const showHoverChip = isHovering && !isBusy;
 
   React.useEffect(() => {
@@ -150,9 +141,7 @@ const Board = () => {
     setDropAnim(true);
     setTimeout(() => setDropAnim(false), 150);
 
-    // Lock the UI until the AI calculation returns
     setIsWaiting(true);
-
     model.send({ type: "click", col: colIndex });
   };
 
@@ -170,12 +159,13 @@ const Board = () => {
     }, 400);
   };
 
-  let hoverTranslateY = -50;
+  // Dynamically scale the Y translations based on the CELL size
+  let hoverTranslateY = -CELL * 0.5;
   let hoverOpacity = 0;
   let hoverTransition = "transform 0.15s ease-out, opacity 0.15s ease-out";
 
   if (dropAnim) {
-    hoverTranslateY = 25;
+    hoverTranslateY = CELL * 0.25;
     hoverOpacity = 0;
     hoverTransition = "transform 0.1s ease-out, opacity 0.1s ease-out";
   } else if (showHoverChip) {
@@ -183,11 +173,11 @@ const Board = () => {
     hoverOpacity = 1;
     hoverTransition = "transform 0.15s ease-out, opacity 0.15s ease-out";
   } else if (!isHovering) {
-    hoverTranslateY = -50;
+    hoverTranslateY = -CELL * 0.5;
     hoverOpacity = 0;
     hoverTransition = "transform 0.15s ease-out, opacity 0.15s ease-out";
   } else {
-    hoverTranslateY = -50;
+    hoverTranslateY = -CELL * 0.5;
     hoverOpacity = 0;
     hoverTransition = "transform 0s, opacity 0.15s ease-out";
   }
@@ -208,13 +198,13 @@ const Board = () => {
               position: "absolute",
               top: "10px",
               left: "20px",
-              width: "80px",
-              height: "80px",
+              width: `${CELL * 0.8}px`,
+              height: `${CELL * 0.8}px`,
               backgroundColor: COLORS.YELLOW,
               borderRadius: "50%",
               boxShadow: "inset 0 3px 6px rgba(0,0,0,0.3)",
               pointerEvents: "none",
-              transform: `translateX(${activeCol * 100}px) translateY(${hoverTranslateY}px)`,
+              transform: `translateX(${activeCol * CELL}px) translateY(${hoverTranslateY}px)`,
               transition: hoverTransition,
               opacity: hoverOpacity,
             }}
@@ -229,8 +219,8 @@ const Board = () => {
                 position: "absolute",
                 top: "10px",
                 right: "20px",
-                width: "80px",
-                height: "80px",
+                width: `${CELL * 0.8}px`,
+                height: `${CELL * 0.8}px`,
                 backgroundColor: COLORS.WHITE,
                 borderRadius: "50%",
                 display: "flex",
@@ -243,8 +233,8 @@ const Board = () => {
               }}
             >
               <svg
-                width="40"
-                height="40"
+                width={CELL * 0.4}
+                height={CELL * 0.4}
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
@@ -263,7 +253,7 @@ const Board = () => {
           )}
 
           <div
-            style={{ display: "grid", gridTemplateColumns: "repeat(7, 100px)" }}
+            style={{ display: "grid", gridTemplateColumns: `repeat(7, ${CELL}px)` }}
           >
             {Array.from({ length: 7 }).map((_, colIndex) => (
               <div
@@ -273,7 +263,7 @@ const Board = () => {
                   setActiveCol(colIndex);
                   setIsHovering(true);
                 }}
-                style={{ width: "100px", height: "100px" }}
+                style={{ width: `${CELL}px`, height: `${CELL}px` }}
               />
             ))}
           </div>
@@ -282,8 +272,8 @@ const Board = () => {
         <div
           style={{
             position: "relative",
-            width: "720px",
-            height: "620px",
+            width: `${CELL * 7 + 20}px`,
+            height: `${CELL * 6 + 20}px`,
           }}
         >
           <div
@@ -291,8 +281,8 @@ const Board = () => {
               position: "absolute",
               top: "10px",
               left: "10px",
-              width: "700px",
-              height: "600px",
+              width: `${CELL * 7}px`,
+              height: `${CELL * 6}px`,
               zIndex: 1,
             }}
           >
@@ -318,10 +308,10 @@ const Board = () => {
                     key={`piece-${rowIndex}-${colIndex}`}
                     style={{
                       position: "absolute",
-                      top: `${rowIndex * 100}px`,
-                      left: `${colIndex * 100}px`,
-                      width: "100px",
-                      height: "100px",
+                      top: `${rowIndex * CELL}px`,
+                      left: `${colIndex * CELL}px`,
+                      width: `${CELL}px`,
+                      height: `${CELL}px`,
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
@@ -329,8 +319,8 @@ const Board = () => {
                   >
                     <div
                       style={{
-                        width: "80px",
-                        height: "80px",
+                        width: `${CELL * 0.8}px`,
+                        height: `${CELL * 0.8}px`,
                         backgroundColor: pieceColor,
                         borderRadius: "50%",
                         boxShadow: "inset 0 3px 6px rgba(0,0,0,0.3)",
@@ -345,16 +335,16 @@ const Board = () => {
               <div
                 style={{
                   position: "absolute",
-                  top: `${activeAnimation.row * 100}px`,
-                  left: `${activeAnimation.col * 100}px`,
-                  width: "100px",
-                  height: "100px",
+                  top: `${activeAnimation.row * CELL}px`,
+                  left: `${activeAnimation.col * CELL}px`,
+                  width: `${CELL}px`,
+                  height: `${CELL}px`,
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
                   transform: activeAnimation.falling
                     ? "translateY(0)"
-                    : `translateY(-${(activeAnimation.row + 1) * 100}px)`,
+                    : `translateY(-${(activeAnimation.row + 1) * CELL}px)`,
                   transition: activeAnimation.falling
                     ? `transform ${ANIMATION_MS / 1000}s cubic-bezier(0.5, 0, 1, 1)`
                     : "none",
@@ -364,8 +354,8 @@ const Board = () => {
               >
                 <div
                   style={{
-                    width: "80px",
-                    height: "80px",
+                    width: `${CELL * 0.8}px`,
+                    height: `${CELL * 0.8}px`,
                     backgroundColor:
                       activeAnimation.player === 1
                         ? COLORS.YELLOW
@@ -385,8 +375,8 @@ const Board = () => {
               border: `10px solid ${COLORS.GREY}`,
               borderRadius: "10px",
               display: "grid",
-              gridTemplateColumns: "repeat(7, 100px)",
-              gridTemplateRows: "repeat(6, 100px)",
+              gridTemplateColumns: `repeat(7, ${CELL}px)`,
+              gridTemplateRows: `repeat(6, ${CELL}px)`,
               zIndex: 10,
               pointerEvents: "none",
             }}
@@ -401,9 +391,9 @@ const Board = () => {
                     setIsHovering(true);
                   }}
                   style={{
-                    width: "100px",
-                    height: "100px",
-                    background: `radial-gradient(circle, transparent 40px, ${COLORS.GREY} 40.5px)`,
+                    width: `${CELL}px`,
+                    height: `${CELL}px`,
+                    background: `radial-gradient(circle, transparent ${CELL * 0.4}px, ${COLORS.GREY} ${CELL * 0.405}px)`,
                     pointerEvents: "auto",
                   }}
                 />
@@ -411,20 +401,18 @@ const Board = () => {
             )}
           </div>
 
-          {/* Layer 3: Policy Visualization Bars Overlaying the Bottom Row */}
           <div
             style={{
               position: "absolute",
               bottom: "6px",
               left: "10px",
               display: "flex",
-              width: "700px",
+              width: `${CELL * 7}px`,
               zIndex: 15,
               pointerEvents: "none",
             }}
           >
             {Array.from({ length: 7 }).map((_, colIndex) => {
-              // Keep at * 100, we will restrict the parent container's width instead
               const rawWidth =
                 policyRaw && policyRaw.length > 0
                   ? policyRaw[colIndex] * 100
@@ -438,7 +426,7 @@ const Board = () => {
                 <div
                   key={`policy-col-${colIndex}`}
                   style={{
-                    width: "100px",
+                    width: `${CELL}px`,
                     display: "flex",
                     flexDirection: "column",
                     alignItems: "center",

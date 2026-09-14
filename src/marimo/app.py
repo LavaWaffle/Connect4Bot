@@ -187,7 +187,8 @@ def init_game(
 
                 temperature = ai_params["temperature"]
                 if math.isclose(temperature, 0.0):
-                    adjusted_policy = policy
+                    adjusted_policy = np.zeros_like(policy)
+                    adjusted_policy[np.argmax(policy)] = 1.0
                 else:
                     adjusted_policy = np.power(policy, 1.0 / temperature)
                     adjusted_policy /= np.sum(adjusted_policy)
@@ -236,7 +237,8 @@ def dynamic_sliders(mo, ai_params, widget, np, math):
         if raw and len(raw) == 7:
             policy = np.array(raw)
             if math.isclose(v, 0.0):
-                adjusted_policy = policy
+                adjusted_policy = np.zeros_like(policy)
+                adjusted_policy[np.argmax(policy)] = 1.0
             else:
                 adjusted_policy = np.power(policy, 1.0 / v)
                 policy_sum = np.sum(adjusted_policy)
@@ -246,8 +248,8 @@ def dynamic_sliders(mo, ai_params, widget, np, math):
             widget.policy_temp = adjusted_policy.tolist()
 
     temp_slider = mo.ui.slider(
-        start=0.1,
-        stop=1.0,
+        start=0.0,
+        stop=2.0,
         step=0.1,
         value=0.2,
         label="Policy Temperature",
