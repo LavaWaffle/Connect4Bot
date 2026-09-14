@@ -20,6 +20,7 @@ const Board = () => {
 
   const [activeCol, setActiveCol] = React.useState<number>(0);
   const [isHovering, setIsHovering] = React.useState<boolean>(false);
+  const [dropAnim, setDropAnim] = React.useState<boolean>(false);
 
   // Button Animation States
   const [isRestartHover, setIsRestartHover] = React.useState<boolean>(false);
@@ -36,6 +37,7 @@ const Board = () => {
   } | null>(null);
 
   const isAnimating = activeAnimation !== null || animationQueue.length > 0;
+  const showHoverChip = isHovering && !isAnimating && !done;
 
   React.useEffect(() => {
     if (done && !isAnimating) {
@@ -63,7 +65,7 @@ const Board = () => {
       return;
     }
 
-    const diffs = [];
+    const diffs: any[] = [];
     for (let r = 0; r < board.length; r++) {
       for (let c = 0; c < board[r].length; c++) {
         if (board[r][c] !== 0 && prevBoardRef.current[r][c] === 0) {
@@ -116,21 +118,49 @@ const Board = () => {
 
   const handleColumnClick = (colIndex: number) => {
     if (isAnimating || done) return;
+
+    // Trigger the localized 150ms drop state independently of the board animation
+    setDropAnim(true);
+    setTimeout(() => setDropAnim(false), 150);
+
     model.send({ type: "click", col: colIndex });
   };
 
   const handleRestart = () => {
-    if (isRestartSpinning) return; // Prevent multiple clicks mid-spin
+    if (isRestartSpinning) return;
 
     setIsRestartSpinning(true);
 
-    // Wait for the 400ms spin animation to finish before destroying the board
     setTimeout(() => {
       model.send({ type: "restart" });
       setIsRestartSpinning(false);
       setIsRestartHover(false);
     }, 400);
   };
+
+  // Dynamically calculate hover chip styles based on the exact animation phase
+  let hoverTranslateY = -50;
+  let hoverOpacity = 0;
+  let hoverTransition = "transform 0.15s ease-out, opacity 0.15s ease-out";
+
+  if (dropAnim) {
+    hoverTranslateY = 25; // Drop into the slot
+    hoverOpacity = 0;     // Fade out during the drop
+    hoverTransition = "transform 0.1s ease-out, opacity 0.1s ease-out";
+  } else if (showHoverChip) {
+    hoverTranslateY = 0;  // Normal resting position
+    hoverOpacity = 1;
+    hoverTransition = "transform 0.15s ease-out, opacity 0.15s ease-out";
+  } else if (!isHovering) {
+    hoverTranslateY = -50; // Slide up naturally on mouse leave
+    hoverOpacity = 0;
+    hoverTransition = "transform 0.15s ease-out, opacity 0.15s ease-out";
+  } else {
+    hoverTranslateY = -50; // Mouse is hovering, but game is animating/done
+    hoverOpacity = 0;
+    // Snap transform to -50px instantly so it re-enters smoothly from the top later
+    hoverTransition = "transform 0s, opacity 0.15s ease-out";
+  }
 
   return (
     <div style={{ display: "flex", justifyContent: "center", padding: "20px" }}>
@@ -151,9 +181,9 @@ const Board = () => {
               borderRadius: "50%",
               boxShadow: "inset 0 3px 6px rgba(0,0,0,0.3)",
               pointerEvents: "none",
-              transform: `translateX(${activeCol * 100}px)`,
-              transition: "transform 0.15s ease-out, opacity 0.15s ease-out",
-              opacity: (isHovering && !isAnimating && !done) ? 1 : 0,
+              transform: `translateX(${activeCol * 100}px) translateY(${hoverTranslateY}px)`,
+              transition: hoverTransition,
+              opacity: hoverOpacity,
             }}
           />
 
