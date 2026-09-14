@@ -67,6 +67,24 @@ def draw_board(screen: Surface, board: npt.NDArray[np.int64]):
     pygame.display.update()
 
 
+def draw_policies(screen: Surface, policies: npt.NDArray[np.float32]):
+    # The total window height based on your existing UI logic
+    height = (ROW_COUNT + 1) * SQUARESIZE
+
+    for c in range(COLUMN_COUNT):
+        # Width is the policy float multiplied by the column width (SQUARESIZE)
+        line_width = int(policies[c] * SQUARESIZE)
+
+        # Draw the line at the bottom of the screen (height - 2) with a height of 2
+        _ = pygame.draw.rect(
+            screen,
+            (255, 0, 0),  # Red for high visibility against the white/grey board
+            (c * SQUARESIZE, height - 2, line_width, 2),
+        )
+
+    pygame.display.update()
+
+
 def render(board: npt.NDArray[np.int64]):
     _ = pygame.init()
     screen: Surface = pygame.display.set_mode((700, 700))
