@@ -2,8 +2,9 @@ import * as React from "react";
 import { createRender, useModelState, useModel } from "@anywidget/react";
 
 const ANIMATION_MS = 400;
-// Change this single value to shrink or grow the entire board (Originally 100)
-const CELL = 70;
+// Easy sizing control: increase/decrease this to grow/shrink the entire board.
+// The board width is 7 * CELL; its height is 6 * CELL, plus padding/borders.
+const CELL = 55;
 
 const COLORS = {
   GREY: "rgb(70, 71, 70)",
@@ -17,9 +18,12 @@ const Board = () => {
   const [done] = useModelState<boolean>("done");
   const [policyRaw, setPolicyRaw] = useModelState<number[]>("policy_raw");
   const [policyTemp, setPolicyTemp] = useModelState<number[]>("policy_temp");
+  const [disableAnimations] = useModelState<boolean>("disable_animations");
   const model = useModel();
 
-  const [renderedBoard, setRenderedBoard] = React.useState<number[][] | null>(null);
+  const [renderedBoard, setRenderedBoard] = React.useState<number[][] | null>(
+    null,
+  );
   const [showRestart, setShowRestart] = React.useState<boolean>(false);
 
   const [activeCol, setActiveCol] = React.useState<number>(0);
@@ -29,11 +33,14 @@ const Board = () => {
   const [isWaiting, setIsWaiting] = React.useState<boolean>(false);
 
   const [isRestartHover, setIsRestartHover] = React.useState<boolean>(false);
-  const [isRestartSpinning, setIsRestartSpinning] = React.useState<boolean>(false);
+  const [isRestartSpinning, setIsRestartSpinning] =
+    React.useState<boolean>(false);
 
   const prevBoardRef = React.useRef<number[][] | null>(null);
 
-  const [animationQueue, setAnimationQueue] = React.useState<{ row: number; col: number; player: number }[]>([]);
+  const [animationQueue, setAnimationQueue] = React.useState<
+    { row: number; col: number; player: number }[]
+  >([]);
   const [activeAnimation, setActiveAnimation] = React.useState<{
     row: number;
     col: number;
@@ -82,12 +89,24 @@ const Board = () => {
     }
 
     const diffs: any[] = [];
+    let needsInstantSync = false;
+
     for (let r = 0; r < board.length; r++) {
       for (let c = 0; c < board[r].length; c++) {
         if (board[r][c] !== 0 && prevBoardRef.current[r][c] === 0) {
           diffs.push({ row: r, col: c, player: board[r][c] });
+        } else if (board[r][c] !== prevBoardRef.current[r][c]) {
+          needsInstantSync = true;
         }
       }
+    }
+
+    if (needsInstantSync || disableAnimations) {
+      setRenderedBoard(board);
+      setAnimationQueue([]);
+      setActiveAnimation(null);
+      prevBoardRef.current = board;
+      return;
     }
 
     if (diffs.length > 0) {
@@ -253,7 +272,10 @@ const Board = () => {
           )}
 
           <div
-            style={{ display: "grid", gridTemplateColumns: `repeat(7, ${CELL}px)` }}
+            style={{
+              display: "grid",
+              gridTemplateColumns: `repeat(7, ${CELL}px)`,
+            }}
           >
             {Array.from({ length: 7 }).map((_, colIndex) => (
               <div
@@ -272,8 +294,12 @@ const Board = () => {
         <div
           style={{
             position: "relative",
+            boxSizing: "border-box",
             width: `${CELL * 7 + 20}px`,
             height: `${CELL * 6 + 20}px`,
+            backgroundColor: COLORS.GREY,
+            borderRadius: "10px",
+            overflow: "hidden",
           }}
         >
           <div
@@ -372,6 +398,7 @@ const Board = () => {
             style={{
               position: "absolute",
               inset: 0,
+              boxSizing: "border-box",
               border: `10px solid ${COLORS.GREY}`,
               borderRadius: "10px",
               display: "grid",

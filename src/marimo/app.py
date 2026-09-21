@@ -1,7 +1,8 @@
 import marimo
 
 __generated_with = "0.24.2"
-app = marimo.App()
+# Use the full available browser width for the board/tree display.
+app = marimo.App(width="compact")
 
 
 @app.cell
@@ -57,7 +58,7 @@ def setup_imports():
 
 @app.cell
 def create_widget_class(anywidget, current_dir, os, traitlets):
-    # Depending on your Vite config, the bundle is usually named index.js or widget.js
+    # Board Widget
     esm_path = os.path.join(current_dir, "board", "src", "board", "static", "index.js")
     if not os.path.exists(esm_path):
         esm_path = os.path.join(
@@ -72,8 +73,22 @@ def create_widget_class(anywidget, current_dir, os, traitlets):
         done = traitlets.Bool(False).tag(sync=True)
         policy_raw = traitlets.List([]).tag(sync=True)
         policy_temp = traitlets.List([]).tag(sync=True)
+        disable_animations = traitlets.Bool(False).tag(sync=True)
 
-    return (Connect4Widget,)
+    # Tree Widget
+    tree_esm_path = os.path.join(
+        current_dir, "tree", "src", "tree", "static", "index.js"
+    )
+    if not os.path.exists(tree_esm_path):
+        tree_esm_path = os.path.join(
+            current_dir, "tree", "src", "tree", "static", "widget.js"
+        )
+
+    class MCTSTreeWidget(anywidget.AnyWidget):
+        _esm = tree_esm_path
+        tree_data = traitlets.Dict({}).tag(sync=True)
+
+    return (Connect4Widget, MCTSTreeWidget)
 
 
 @app.cell
@@ -86,6 +101,7 @@ def define_ai_params():
 def init_game(
     Connect4Model,
     Connect4Widget,
+    MCTSTreeWidget,
     get_init_board,
     get_valid_moves,
     is_board_full,
@@ -135,9 +151,40 @@ def init_game(
             self.board = get_init_board()
             self.game_over = False
             self.is_processing = False
+            self.mcts_root_board = get_init_board()
 
     state = GameState()
     widget = Connect4Widget(board=state.board.tolist(), done=state.game_over)
+    tree_widget = MCTSTreeWidget(tree_data={})
+
+    def handle_tree_msg(tree_w, msg, buffers):
+        msg_type = msg.get("type")
+
+        if msg_type == "tree_node_clicked":
+            action = msg.get("action")
+            path = msg.get("path", [])
+
+            # Use the existing state.board reference
+            preview_board = np.copy(state.mcts_root_board)
+            current_player = -1
+
+            for move in path:
+                if move is not None:
+                    preview_board = place_piece(
+                        preview_board, player=current_player, action=move
+                    )
+                    current_player *= -1
+
+            widget.disable_animations = True
+            widget.board = preview_board.tolist()
+
+        elif msg_type == "tree_mouse_leave":
+            # Revert to the actual game state
+            widget.disable_animations = False
+            widget.board = state.board.tolist()
+            print("Reset")
+
+    tree_widget.on_msg(handle_tree_msg)
 
     def handle_msg(widget, msg, buffers):
         msg_type = msg.get("type")
@@ -145,9 +192,11 @@ def init_game(
         # --- Handle Game Restart ---
         if msg_type == "restart":
             state.board = get_init_board()
+            state.mcts_root_board = get_init_board()
             state.game_over = False
             widget.board = state.board.tolist()
             widget.done = False
+            tree_widget.tree_data = {}
             print("Game Restarted!")
             return
 
@@ -181,9 +230,60 @@ def init_game(
                     return
 
                 # --- 2. AI Turn ---
-                policy = run_batched_mcts(
-                    [state.board], [-1], predict_fn, num_sims=ai_params["num_sims"]
-                )[0]
+                policies, roots = run_batched_mcts(
+                    [state.board],
+                    [-1],
+                    predict_fn,
+                    num_sims=ai_params["num_sims"],
+                    return_roots=True,
+                )
+                policy = policies[0]
+                ai_root = roots[0]
+
+                tree_data = ai_root.to_dict(max_depth=2)
+
+                def keep_top_three_children(node, root_policy=None):
+                    children = node.get("children", [])
+                    is_root = root_policy is not None
+
+                    if is_root:
+                        # The root uses the final MCTS policy based on visit counts.
+                        children = sorted(
+                            children,
+                            key=lambda child: float(root_policy[child["action"]]),
+                            reverse=True,
+                        )
+                    else:
+                        # Descendants use their per-node model policy (`prior`).
+                        children = sorted(
+                            children,
+                            key=lambda child: float(child["prior"]),
+                            reverse=True,
+                        )
+
+                    # Truncate to top 3
+                    top_children = children[:3]
+
+                    if is_root:
+                        # Reorder visually: 1st in middle, 2nd above, 3rd below
+                        reordered = []
+                        for i, child in enumerate(top_children):
+                            if i % 2 == 1:
+                                # Insert at the front (renders above)
+                                reordered.insert(0, child)
+                            else:
+                                # Append to the back (renders below)
+                                reordered.append(child)
+                        node["children"] = reordered
+                    else:
+                        node["children"] = top_children
+
+                    for child in node["children"]:
+                        # Descendants do not receive the root_policy, keeping their default sorting
+                        keep_top_three_children(child)
+
+                keep_top_three_children(tree_data, root_policy=policy)
+                tree_widget.tree_data = tree_data
 
                 temperature = ai_params["temperature"]
                 if math.isclose(temperature, 0.0):
@@ -194,6 +294,8 @@ def init_game(
                     adjusted_policy /= np.sum(adjusted_policy)
                 widget.policy_raw = policy.tolist()
                 widget.policy_temp = adjusted_policy.tolist()
+
+                state.mcts_root_board = np.copy(state.board)
 
                 best_col = int(np.random.choice(7, p=adjusted_policy))
                 state.board = place_piece(state.board, player=-1, action=best_col)
@@ -212,16 +314,16 @@ def init_game(
                 state.is_processing = False
                 widget.send({"type": "turn_complete"})
 
-    # Listen for custom messages instead of traitlet changes
     widget.on_msg(handle_msg)
-    return (widget,)
+    return (widget, tree_widget)
 
 
 @app.cell
 def dynamic_sliders(mo, ai_params, widget, np, math):
     sim_slider = mo.ui.slider(
-        10,
-        500,
+        start=50,
+        stop=500,
+        step=25,
         value=100,
         label="Num Monte Carlo Simulations",
         show_value=True,
@@ -263,8 +365,27 @@ def dynamic_sliders(mo, ai_params, widget, np, math):
 
 
 @app.cell
-def display_ui(mo, widget, sliders_view):
-    game_interface = mo.vstack([sliders_view, widget])
+def display_ui(mo, widget, tree_widget, sliders_view):
+    # Easy layout controls: adjust the gap here to change the spacing between panels.
+    board_panel = mo.vstack(
+        [mo.md("### Board"), widget],
+        align="center",
+        gap=0,
+    )
+    tree_panel = mo.vstack(
+        [mo.md("### MCTS Tree"), tree_widget],
+        align="center",
+        gap=0.5,
+    )
+
+    board_and_tree = mo.hstack(
+        [board_panel, tree_panel],
+        justify="start",
+        align="start",
+        gap=0.5,
+    )
+    game_interface = mo.vstack([sliders_view, board_and_tree])
+
     game_interface
 
 

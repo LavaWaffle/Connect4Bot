@@ -1,0 +1,18 @@
+{
+	"scripts": {
+		"dev": "npm run build -- --sourcemap=inline --watch",
+		"build": "bun build js/widget.tsx --minify --format=esm --outdir=src/tree/static --asset-naming=[name].[ext]",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@anywidget/react": "^0.2.1",
+		"react": "^19.2.4",
+		"react-d3-tree": "^3.6.6",
+		"react-dom": "^19.2.4"
+	},
+	"devDependencies": {
+		"@types/react": "^19.2.9",
+		"@types/react-dom": "^19.2.3",
+		"typescript": "^6.0.2"
+	}
+}

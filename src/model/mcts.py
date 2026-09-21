@@ -64,6 +64,31 @@ class Node:
 
         return selected_action, self.children[selected_action]
 
+    def to_dict(self, max_depth: int = 2, action: int | None = None) -> dict:
+        """Recursively converts the node and its children into a JSON-serializable dictionary."""
+        q_val = (self.value / self.visits * self.turn) if self.visits > 0 else 0.0
+
+        node_dict = {
+            "action": action,
+            "turn": int(self.turn),
+            "visits": int(self.visits),
+            "value": round(float(self.value), 3),
+            "q_value": round(float(q_val), 3),
+            "prior": round(float(self.prior), 3),
+            "children": [],
+        }
+
+        if max_depth > 0:
+            for act, child in self.children.items():
+                node_dict["children"].append(
+                    child.to_dict(max_depth=max_depth - 1, action=act)
+                )
+
+            # Sort children by visit count descending so the best moves appear first
+            node_dict["children"].sort(key=lambda x: x["visits"], reverse=True)
+
+        return node_dict
+
 
 def get_action_probs(root: Node) -> npt.NDArray[np.float32]:
     action_probs = np.zeros(7, dtype=np.float32)
@@ -81,7 +106,8 @@ def run_batched_mcts(
     players: list[int],
     predict_batch_fn: Callable,
     num_sims: int = NUM_SIMS,
-) -> list[npt.NDArray[np.float32]]:
+    return_roots: bool = False,
+) -> list[npt.NDArray[np.float32]] | tuple[list[npt.NDArray[np.float32]], list[Node]]:
     roots = [Node(prior=0.0, turn=p, state=b) for b, p in zip(boards, players)]
 
     _, initial_policies = predict_batch_fn(boards, players)
@@ -136,7 +162,10 @@ def run_batched_mcts(
                 node.value += value
                 node.visits += 1
 
-    return [get_action_probs(root) for root in roots]
+    policies = [get_action_probs(root) for root in roots]
+    if return_roots:
+        return policies, roots
+    return policies
 
 
 def run_mcts(
