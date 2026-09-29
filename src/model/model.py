@@ -14,6 +14,9 @@ class Connect4Model(nn.Module):
         )
         self.initial_bn = nn.BatchNorm2d(128)
 
+        self.res1_relu = nn.ReLU()
+        self.res2_relu = nn.ReLU()
+
         # resnet block 1
         self.res1_conv1 = nn.Conv2d(
             128, 128, kernel_size=3, stride=1, padding=1, bias=False
@@ -59,14 +62,14 @@ class Connect4Model(nn.Module):
         x = F.relu(self.res1_bn1(self.res1_conv1(x)))
         x = self.res1_bn2(self.res1_conv2(x))
         x += res
-        x = F.relu(x)
+        x = self.res1_relu(x)
 
         # res 2
         res = x
         x = F.relu(self.res2_bn1(self.res2_conv1(x)))
         x = self.res2_bn2(self.res2_conv2(x))
         x += res
-        x = F.relu(x)
+        x = self.res2_relu(x)
 
         # value head
         v = F.relu(self.value_bn(self.value_conv(x)))

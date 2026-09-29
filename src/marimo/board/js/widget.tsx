@@ -4,7 +4,6 @@ import { createRender, useModelState, useModel } from "@anywidget/react";
 const ANIMATION_MS = 400;
 // Easy sizing control: increase/decrease this to grow/shrink the entire board.
 // The board width is 7 * CELL; its height is 6 * CELL, plus padding/borders.
-const CELL = 55;
 
 const COLORS = {
   GREY: "rgb(70, 71, 70)",
@@ -15,6 +14,9 @@ const COLORS = {
 
 const Board = () => {
   const [board] = useModelState<number[][]>("board");
+  const [frozen] = useModelState<boolean>("frozen");
+  const [scaleState] = useModelState<number>("scale");
+  const CELL = 55 * (scaleState || 1.0);
   const [done] = useModelState<boolean>("done");
   const [policyRaw, setPolicyRaw] = useModelState<number[]>("policy_raw");
   const [policyTemp, setPolicyTemp] = useModelState<number[]>("policy_temp");
@@ -114,7 +116,7 @@ const Board = () => {
     }
 
     prevBoardRef.current = board;
-  }, [board]);
+  }, [board, disableAnimations]);
 
   React.useEffect(() => {
     if (!activeAnimation && animationQueue.length > 0) {
@@ -152,7 +154,102 @@ const Board = () => {
     }
   }, [activeAnimation]);
 
-  if (!board || !renderedBoard) return <div>Loading board...</div>;
+  if (!board) return <div>Loading board...</div>;
+
+  // --- FROZEN RENDER PATH ---
+  if (frozen) {
+    return (
+      <div style={{ display: "flex", justifyContent: "center", padding: "20px" }}>
+        <div
+          style={{
+            position: "relative",
+            boxSizing: "border-box",
+            width: `${CELL * 7 + 20}px`,
+            height: `${CELL * 6 + 20}px`,
+            backgroundColor: COLORS.GREY,
+            borderRadius: "10px",
+            overflow: "hidden",
+          }}
+        >
+          <div
+            style={{
+              position: "absolute",
+              top: "10px",
+              left: "10px",
+              width: `${CELL * 7}px`,
+              height: `${CELL * 6}px`,
+              zIndex: 1,
+            }}
+          >
+            {board.map((row, rowIndex) =>
+              row.map((cell, colIndex) => {
+                let pieceColor = COLORS.WHITE;
+                if (cell === 1) pieceColor = COLORS.YELLOW;
+                else if (cell === -1) pieceColor = COLORS.BLUE;
+
+                return (
+                  <div
+                    key={`piece-${rowIndex}-${colIndex}`}
+                    style={{
+                      position: "absolute",
+                      top: `${rowIndex * CELL}px`,
+                      left: `${colIndex * CELL}px`,
+                      width: `${CELL}px`,
+                      height: `${CELL}px`,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: `${CELL * 0.8}px`,
+                        height: `${CELL * 0.8}px`,
+                        backgroundColor: pieceColor,
+                        borderRadius: "50%",
+                        boxShadow: "inset 0 3px 6px rgba(0,0,0,0.3)",
+                      }}
+                    />
+                  </div>
+                );
+              }),
+            )}
+          </div>
+
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              boxSizing: "border-box",
+              border: `10px solid ${COLORS.GREY}`,
+              borderRadius: "10px",
+              display: "grid",
+              gridTemplateColumns: `repeat(7, ${CELL}px)`,
+              gridTemplateRows: `repeat(6, ${CELL}px)`,
+              zIndex: 10,
+              pointerEvents: "none",
+            }}
+          >
+            {board.map((row, rowIndex) =>
+              row.map((_, colIndex) => (
+                <div
+                  key={`face-${rowIndex}-${colIndex}`}
+                  style={{
+                    width: `${CELL}px`,
+                    height: `${CELL}px`,
+                    background: `radial-gradient(circle, transparent ${CELL * 0.4}px, ${COLORS.GREY} ${CELL * 0.405}px)`,
+                  }}
+                />
+              )),
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // --- INTERACTIVE RENDER PATH ---
+  if (!renderedBoard) return <div>Loading board...</div>;
 
   const handleColumnClick = (colIndex: number) => {
     if (isBusy) return;
@@ -178,7 +275,6 @@ const Board = () => {
     }, 400);
   };
 
-  // Dynamically scale the Y translations based on the CELL size
   let hoverTranslateY = -CELL * 0.5;
   let hoverOpacity = 0;
   let hoverTransition = "transform 0.15s ease-out, opacity 0.15s ease-out";
@@ -236,8 +332,8 @@ const Board = () => {
               onMouseLeave={() => setIsRestartHover(false)}
               style={{
                 position: "absolute",
-                top: "10px",
-                right: "20px",
+                top: `${CELL * 0.1}px`,
+                right: `${10 + (CELL * 0.1)}px`,
                 width: `${CELL * 0.8}px`,
                 height: `${CELL * 0.8}px`,
                 backgroundColor: COLORS.WHITE,

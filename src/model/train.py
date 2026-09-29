@@ -1,5 +1,6 @@
 import copy
 import os
+from collections import deque
 
 import numpy as np
 import numpy.typing as npt
@@ -17,6 +18,17 @@ from .game_logic import (
 )
 from .mcts import run_batched_mcts
 from .model import Connect4Model
+
+
+def augment_with_symmetry(
+    episode_data: list[tuple],
+) -> list[tuple]:
+    """Double training data by appending horizontally mirrored positions."""
+    mirrored = [
+        (np.fliplr(board).copy(), policy[::-1].copy(), value, turn)
+        for board, policy, value, turn in episode_data
+    ]
+    return episode_data + mirrored
 
 
 class Connect4Dataset(Dataset):
@@ -75,6 +87,11 @@ def self_play_batch_episode(model, device, num_batch: int = 10):
 
     all_episode_data = {i: [] for i in range(num_batch)}
     finished_data = []
+    game_wins = 0
+    game_draws = 0
+    entropies: list[float] = []
+
+    TEMP_THRESHOLD = 15  # stochastic sampling for first N moves, then argmax
 
     while active_indicies:
         active_boards = [boards[i] for i in active_indicies]
@@ -84,7 +101,8 @@ def self_play_batch_episode(model, device, num_batch: int = 10):
             active_boards,
             active_players,
             lambda states, turns: predict_batch_fn(states, turns, model, device),
-            num_sims=100,
+            num_sims=200,
+            add_noise=True,
         )
 
         next_active = []
@@ -93,26 +111,38 @@ def self_play_batch_episode(model, device, num_batch: int = 10):
         ):
             all_episode_data[idx].append((board, policy, player))
 
-            action = np.random.choice(7, p=policy)
+            nonzero = policy[policy > 0]
+            entropies.append(float(-np.sum(nonzero * np.log(nonzero))))
+
+            move_number = len(all_episode_data[idx])
+            if move_number < TEMP_THRESHOLD:
+                action = np.random.choice(7, p=policy)
+            else:
+                action = int(np.argmax(policy))
             new_board = boards[idx] = place_piece(board, player, action)
 
             if is_win(new_board, player):
-                finished_data.extend(
-                    [
-                        (b, p, float(player), turn)
-                        for b, p, turn in all_episode_data[idx]
-                    ]
-                )
+                game_wins += 1
+                game_data = [
+                    (b, p, float(player), turn) for b, p, turn in all_episode_data[idx]
+                ]
+                finished_data.extend(augment_with_symmetry(game_data))
             elif is_board_full(new_board):
-                finished_data.extend(
-                    [(b, p, 0.0, turn) for b, p, turn in all_episode_data[idx]]
-                )
+                game_draws += 1
+                game_data = [(b, p, 0.0, turn) for b, p, turn in all_episode_data[idx]]
+                finished_data.extend(augment_with_symmetry(game_data))
             else:
                 players[idx] *= -1
                 next_active.append(idx)
 
         active_indicies = next_active
-    return finished_data
+
+    stats = {
+        "wins": game_wins,
+        "draws": game_draws,
+        "avg_entropy": float(np.mean(entropies)) if entropies else 0.0,
+    }
+    return finished_data, stats
 
 
 def arena_eval(new_model, old_model, device, num_games=20, num_sims=50):
@@ -191,8 +221,12 @@ def arena_eval(new_model, old_model, device, num_games=20, num_sims=50):
                     players[idx] *= -1
                     next_active.append(idx)
 
-        process_moves(new_turn_indicies, new_policies, is_new_acting=True)
-        process_moves(old_turn_indicies, old_policies, is_new_acting=False)
+        process_moves(
+            new_turn_indicies, new_policies, is_new_acting=True, temperature=0.0
+        )
+        process_moves(
+            old_turn_indicies, old_policies, is_new_acting=False, temperature=0.0
+        )
 
         active_indicies = next_active
 
@@ -233,28 +267,55 @@ if __name__ == "__main__":
 
     optimizer = optim.Adam(current_model.parameters(), lr=0.001)
 
-    NUM_EPOCHS = 10
-    EPISODES_PER_EPOCH = 5
-    EVAL_GAMES = 20
-    WIN_THRESHOLD = 0.55  # new model wins 0.55 of games -> replaces best model
+    NUM_EPOCHS = 100
+    EPISODES_PER_EPOCH = 10
+    EVAL_GAMES = 40
+    WIN_THRESHOLD = 0.52
+    REPLAY_BUFFER_MAX_EPOCHS = 20
+
+    replay_buffer: deque[list] = deque(maxlen=REPLAY_BUFFER_MAX_EPOCHS)
 
     for epoch in range(NUM_EPOCHS):
         print(f"\n=======================")
         print(f"=== EPOCH {epoch + 1}/{NUM_EPOCHS} ===")
         print(f"=======================\n")
 
-        memory = []
+        epoch_memory = []
+        epoch_wins = epoch_draws = 0
+        epoch_entropy = 0.0
         best_model.eval()
 
         for i in range(EPISODES_PER_EPOCH):
             print(f"[TRAIN] Self_Play_Episode: {i + 1}/{EPISODES_PER_EPOCH}")
-            episode_data = self_play_batch_episode(best_model, device, num_batch=16)
-            memory.extend(episode_data)
+            episode_data, ep_stats = self_play_batch_episode(
+                best_model, device, num_batch=16
+            )
+            epoch_memory.extend(episode_data)
+            epoch_wins += ep_stats["wins"]
+            epoch_draws += ep_stats["draws"]
+            epoch_entropy += ep_stats["avg_entropy"]
 
-        print("[TRAIN] Training current model on new data...")
+        total_games = epoch_wins + epoch_draws
+        draw_rate = epoch_draws / total_games if total_games > 0 else 0.0
+        print(
+            f"[TRAIN] Self-Play Stats: {total_games} games | "
+            f"Draw Rate: {draw_rate * 100:.1f}% | "
+            f"Avg Policy Entropy: {epoch_entropy / EPISODES_PER_EPOCH:.3f}"
+        )
+
+        replay_buffer.append(epoch_memory)
+        all_memory = [sample for epoch_data in replay_buffer for sample in epoch_data]
+
+        print(
+            f"[TRAIN] Training on {len(all_memory)} positions "
+            f"({len(replay_buffer)}/{REPLAY_BUFFER_MAX_EPOCHS} epochs in buffer)..."
+        )
         current_model.train()
-        dataset = Connect4Dataset(memory)
+        dataset = Connect4Dataset(all_memory)
         dataloader = DataLoader(dataset, batch_size=64, shuffle=True, drop_last=True)
+
+        total_loss = total_value_loss = total_policy_loss = 0.0
+        num_batches = 0
 
         for state_batch, pi_batch, v_batch in dataloader:
             # batches = truth from actual games played till end
@@ -274,6 +335,17 @@ if __name__ == "__main__":
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+
+            total_loss += loss.item()
+            total_value_loss += value_loss.item()
+            total_policy_loss += policy_loss.item()
+            num_batches += 1
+
+        print(
+            f"[TRAIN] Loss: {total_loss / num_batches:.4f} "
+            f"(value: {total_value_loss / num_batches:.4f}, "
+            f"policy: {total_policy_loss / num_batches:.4f})"
+        )
 
         print("[TRAIN] Running Arena Evaluation...")
         wins_new, wins_old, draws = arena_eval(

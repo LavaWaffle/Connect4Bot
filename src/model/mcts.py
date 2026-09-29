@@ -7,6 +7,8 @@ from math import sqrt
 import numpy as np
 import numpy.typing as npt
 
+from model.ui import render
+
 from .game_logic import get_valid_moves, is_board_full, is_win, place_piece
 
 NUM_SIMS = 100
@@ -107,12 +109,27 @@ def run_batched_mcts(
     predict_batch_fn: Callable,
     num_sims: int = NUM_SIMS,
     return_roots: bool = False,
+    add_noise: bool = False,
+    noise_epsilon: float = 0.25,
+    noise_alpha: float = 0.8,
 ) -> list[npt.NDArray[np.float32]] | tuple[list[npt.NDArray[np.float32]], list[Node]]:
     roots = [Node(prior=0.0, turn=p, state=b) for b, p in zip(boards, players)]
 
     _, initial_policies = predict_batch_fn(boards, players)
     for root, policy in zip(roots, initial_policies):
         root.expand(policy)
+
+    if add_noise:
+        for root in roots:
+            actions = list(root.children.keys())
+            n = len(actions)
+            if n > 0:
+                noise = np.random.dirichlet([noise_alpha] * n)
+                for action, eta in zip(actions, noise):
+                    child = root.children[action]
+                    child.prior = (
+                        1 - noise_epsilon
+                    ) * child.prior + noise_epsilon * eta
 
     for _ in range(num_sims):
         search_paths = []
@@ -220,6 +237,8 @@ if __name__ == "__main__":
             [-1, 1, 1, -1, 1, -1, 1],
         ]
     )
+
+    render(board)
 
     def dummy_predict_fn(
         state: npt.NDArray[np.int64], turn: int
